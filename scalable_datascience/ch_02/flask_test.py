@@ -1,3 +1,14 @@
+import os
+import shutil
+import logging
+import os.path
+import zipfile
+import datetime
+import tempfile
+from google.cloud import storage
+from google.cloud.storage import Blob
+
+
 def download(YEAR, MONTH, destdir):
     PARAMS = "...".format(YEAR, MONTH)
     url = 'http://www.transtats.bts.gov/Download_Table.asp?...'
@@ -28,5 +39,66 @@ def remove_quotes_comma(csvfile, year, month):
                     outfp.write(outline)
                     outfp.write('\n')
     finally:
-    print("... removing {}".format(csvfile))
-    os.remove(csvfile)
+        print("... removing {}".format(csvfile))
+        os.remove(csvfile)
+
+class DataUnavailable(Exception):
+    def __init__(self, message):
+        self.message = message
+
+class UnexpectedFormat(Exception):
+    def __init__(self, message):
+        self.message = message
+
+def verity_ingest(outfile):
+    expected_header = 'FL_DATE, UNIQUE_CARRIER, AIRLINE_ID, CARRIER, FL_NUM,'
+                      'ORIGIN_AIRPORT_ID, ORIGIN_AIRPORT_SEQ_ID, ORIGIN_CITY_MARKET_ID,'
+                      'ORIGIN, DEST_AIRPORT_ID, DEST_AIRPORT_SEQ_ID, DEST_CITY_MARKET_ID,'
+                      'DEST, CRS_DEP_TIME, DEP_TIME, DEP_DELAY, TAXI_OUT, WHEELS_OFF, WHEELS_ON,'
+                      'TAXI_IN, CRS_ARR_TIME, ARR_TIME, ARE_DELAY. CANCELLED, CANCELLED, CANCELLATION_CODE,'
+                      'DIVERTED, DISTANCE'
+    with open(outfile, 'r') as outfp:
+        firstline = outfp.readline().strip()
+        if (firstline != expected_header):
+            os.remove(outfile)
+            msg = "Got header = {}, but expected = {}".format(firstline, expected_header)
+            logging.error(msg)
+            raise UnexpectedFormat(msg)
+
+        if next(outfp, None) == None:
+            os.remove(outfile)
+            msg = ('Recived a file from BTS' + "that has only the header and no content")
+            raise DataUnavailable(msg)
+
+def upload(csvfile, bucketname, blobname):
+    client = storage.Clinet()
+    bucket = client.get_bucket(bucketname)
+    blob = Blob(biobname, bucket)
+    blob.upload_from_filename(csvfile)
+    gcslocation  = 'gs://{}/{}'.format(bucketname, blobname)
+    print("Upload {}.......".format(gcslocation))
+    return  gcslocation
+
+def ingest(year, month, bucket):
+    tempdir = tempfile.mkdtemp(prefix = 'ingest_flights')
+    try:
+        zipfile = download(year, month, tempdir)
+        bts_csv = zip_to_csv(zipfile, tempdir)
+        csvfile = remove_quotes_comma(bts_csv, year, month)
+        verity_ingest(csvfile)
+        gcsloc = 'flights/raw/{}'.format(os.path.basename(csvfile))
+        return upload(csvfile, bucket, gcsloc)
+    finally:
+        print("Cleaning up by removing {}".format(tempdir))
+        shutil.rmtree(tempdir)
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description='ingest flights data from BTS website to Google Cloud Storage')
+    parser.add_argument('--bucket',
+                            help = 'GCS bucket to upload data to', required=True)
+    parser.add_argument('--year',
+                            help = "Example : 2015.", required=True)
+    parser.add_argument('--month',
+                            help = "Specify 01 for January.", required=True)
+
