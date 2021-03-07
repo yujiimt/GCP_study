@@ -101,4 +101,10 @@ if __name__ == "__main__":
                             help = "Example : 2015.", required=True)
     parser.add_argument('--month',
                             help = "Specify 01 for January.", required=True)
+    try:
+        args = parser.parse_args()
+        gcsfile = ingest(args.year, args.month, args.bucket)
+        print("Success...ingested to {}".format(gcsfile))
+    except DataUnavailable as e:
+        print("Try again later {}:".format(e.message))
 
